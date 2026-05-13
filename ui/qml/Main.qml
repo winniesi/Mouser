@@ -619,9 +619,34 @@ ApplicationWindow {
         }
     }
 
+    // LSUIElement on macOS: every close path hides the window so the engine keeps running.
+    function dismiss() {
+        root.hide()
+    }
+
     onClosing: function(close) {
         close.accepted = false
-        root.hide()
+        root.dismiss()
+    }
+
+    // LSUIElement apps have no platform menu bar to bind StandardKey.Close against.
+    Shortcut {
+        sequence: StandardKey.Close
+        context: Qt.ApplicationShortcut
+        onActivated: root.dismiss()
+    }
+
+    Shortcut {
+        sequence: "Ctrl+M"
+        context: Qt.ApplicationShortcut
+        onActivated: root.dismiss()
+    }
+
+    // WindowShortcut keeps Esc scoped to the main window; modal Popups still close first via CloseOnEscape.
+    Shortcut {
+        sequence: "Escape"
+        context: Qt.WindowShortcut
+        onActivated: root.dismiss()
     }
 
     Connections {
