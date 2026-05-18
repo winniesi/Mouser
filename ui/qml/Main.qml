@@ -377,6 +377,10 @@ ApplicationWindow {
                            ? Qt.rgba(1, 1, 1, uiState.darkMode ? 0.08 : 0.65)
                            : "transparent"
 
+                    Accessible.role: Accessible.Button
+                    Accessible.name: s["dialog.close"]
+                    Accessible.onPressAction: aboutDialog.close()
+
                     AppIcon {
                         anchors.centerIn: parent
                         width: 14

@@ -216,6 +216,9 @@ _TRANSLATIONS = {
         ),
         "accessibility.info": "System Settings -> Privacy & Security -> Accessibility",
 
+        # Common dialog chrome
+        "dialog.close": "Close",
+
         # About dialog
         "about.title": "About Mouser",
         "about.subtitle": "Runtime and build details for support and debugging.",
@@ -387,8 +390,8 @@ _TRANSLATIONS = {
         "scroll.scroll_direction_desc": "\u53cd\u8f6c\u6eda\u52a8\u65b9\u5411\uff08\u81ea\u7136\u6eda\u52a8\uff09",
         "scroll.invert_vertical": "\u53cd\u8f6c\u5782\u76f4\u6eda\u52a8",
         "scroll.invert_horizontal": "\u53cd\u8f6c\u6c34\u5e73\u6eda\u52a8",
-        "scroll.ignore_trackpad": "Ignore trackpad",
-        "scroll.ignore_trackpad_desc": "Only respond to mouse events, not trackpad or Magic Mouse",
+        "scroll.ignore_trackpad": "\u5ffd\u7565\u89e6\u6478\u677f",
+        "scroll.ignore_trackpad_desc": "\u4ec5\u54cd\u5e94\u9f20\u6807\u4e8b\u4ef6\uff0c\u4e0d\u54cd\u5e94\u89e6\u6478\u677f\u6216 Magic Mouse",
         "scroll.dpi_note": "DPI \u66f4\u6539\u9700\u8981\u901a\u8fc7 HID++ \u4e0e\u8bbe\u5907\u901a\u4fe1\uff0c\u5c06\u5728\u77ed\u6682\u5ef6\u8fdf\u540e\u751f\u6548\u3002",
         "scroll.language": "\u8bed\u8a00",
         "scroll.language_desc": "\u9009\u62e9\u5e94\u7528\u7a0b\u5e8f\u7684\u663e\u793a\u8bed\u8a00\u3002",
@@ -425,6 +428,8 @@ _TRANSLATIONS = {
             "\u8bf7\u6388\u4e88\u6743\u9650\uff0c\u7136\u540e\u91cd\u65b0\u542f\u52a8 Mouser\u3002"
         ),
         "accessibility.info": "\u7cfb\u7edf\u8bbe\u7f6e -> \u9690\u79c1\u4e0e\u5b89\u5168\u6027 -> \u8f85\u52a9\u529f\u80fd",
+
+        "dialog.close": "\u5173\u95ed",
 
         "about.title": "\u5173\u4e8e Mouser",
         "about.subtitle": "\u7528\u4e8e\u652f\u6301\u548c\u8c03\u8bd5\u7684\u8fd0\u884c\u65f6\u4e0e\u6784\u5efa\u4fe1\u606f\u3002",
@@ -595,8 +600,8 @@ _TRANSLATIONS = {
         "scroll.scroll_direction_desc": "\u53cd\u8f49\u6372\u52d5\u65b9\u5411\uff08\u81ea\u7136\u6372\u52d5\uff09",
         "scroll.invert_vertical": "\u53cd\u8f49\u5782\u76f4\u6372\u52d5",
         "scroll.invert_horizontal": "\u53cd\u8f49\u6c34\u5e73\u6372\u52d5",
-        "scroll.ignore_trackpad": "Ignore trackpad",
-        "scroll.ignore_trackpad_desc": "Only respond to mouse events, not trackpad or Magic Mouse",
+        "scroll.ignore_trackpad": "\u5ffd\u7565\u89f8\u63a7\u677f",
+        "scroll.ignore_trackpad_desc": "\u50c5\u56de\u61c9\u6ed1\u9f20\u4e8b\u4ef6\uff0c\u4e0d\u56de\u61c9\u89f8\u63a7\u677f\u6216 Magic Mouse",
         "scroll.dpi_note": "DPI \u66f4\u6539\u9700\u8981\u900f\u904e HID++ \u8207\u88dd\u7f6e\u901a\u8a0a\uff0c\u5c07\u5728\u77ed\u66ab\u5ef6\u9072\u5f8c\u751f\u6548\u3002",
         "scroll.language": "\u8a9e\u8a00",
         "scroll.language_desc": "\u9078\u64c7\u61c9\u7528\u7a0b\u5f0f\u7684\u986f\u793a\u8a9e\u8a00\u3002",
@@ -633,6 +638,8 @@ _TRANSLATIONS = {
             "\u8acb\u6388\u4e88\u6b0a\u9650\uff0c\u7136\u5f8c\u91cd\u65b0\u555f\u52d5 Mouser\u3002"
         ),
         "accessibility.info": "\u7cfb\u7d71\u8a2d\u5b9a -> \u96b1\u79c1\u6b0a\u8207\u5b89\u5168\u6027 -> \u8f14\u52a9\u4f7f\u7528",
+
+        "dialog.close": "\u95dc\u9589",
 
         "about.title": "\u95dc\u65bc Mouser",
         "about.subtitle": "\u63d0\u4f9b\u652f\u63f4\u8207\u9664\u932f\u7528\u7684\u57f7\u884c\u6642\u8207\u5efa\u7f6e\u8cc7\u8a0a\u3002",
