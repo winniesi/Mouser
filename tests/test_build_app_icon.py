@@ -5,6 +5,7 @@ Coverage targets:
 * ``_require_tool``    -- explicit error when an OS-supplied binary is missing.
 * ``_run_tool``        -- non-zero subprocess exit surfaces stderr.
 * ``build_ico``        -- writes a valid multi-size .ico from the master.
+* ``build_linux_icons`` -- writes hicolor app icons for Linux desktop entries.
 * ``main``             -- platform gating refuses non-darwin runs.
 
 We intentionally skip the live ``build_icns`` smoke test in CI: it shells out
@@ -178,6 +179,64 @@ class BuildIcoTests(unittest.TestCase):
         self.assertEqual(first.read_bytes(), second.read_bytes())
 
 
+@unittest.skipUnless(Image is not None, "Pillow not installed in test environment")
+@unittest.skipUnless(build_app_icon is not None, "build_app_icon script unavailable")
+class BuildLinuxIconsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        import tempfile
+
+        path = tempfile.mkdtemp(prefix="mouser-icon-test-")
+        self.addCleanup(shutil.rmtree, path, ignore_errors=True)
+        self.tmp = Path(path)
+
+    def _opaque_master(self) -> Image.Image:
+        canvas = Image.new("RGBA", (1024, 1024), (0, 0, 0, 0))
+        body = Image.new("RGBA", (824, 824), (11, 18, 32, 255))
+        canvas.paste(body, (100, 100))
+        return canvas
+
+    def test_writes_hicolor_png_ladder(self) -> None:
+        out_root = self.tmp / "hicolor"
+
+        build_app_icon.build_linux_icons(self._opaque_master(), out_root=out_root)
+
+        for size in build_app_icon.LINUX_ICON_SIZES:
+            with self.subTest(size=size):
+                path = (
+                    out_root
+                    / f"{size}x{size}"
+                    / "apps"
+                    / f"{build_app_icon.LINUX_ICON_NAME}.png"
+                )
+                self.assertTrue(path.is_file(), path)
+                with Image.open(path) as image:
+                    self.assertEqual(image.size, (size, size))
+                    self.assertEqual(image.mode, "RGBA")
+
+    def test_output_is_reproducible(self) -> None:
+        master = self._opaque_master()
+        first = self.tmp / "first"
+        second = self.tmp / "second"
+
+        build_app_icon.build_linux_icons(master, out_root=first)
+        build_app_icon.build_linux_icons(master, out_root=second)
+
+        for size in build_app_icon.LINUX_ICON_SIZES:
+            first_path = (
+                first
+                / f"{size}x{size}"
+                / "apps"
+                / f"{build_app_icon.LINUX_ICON_NAME}.png"
+            )
+            second_path = (
+                second
+                / f"{size}x{size}"
+                / "apps"
+                / f"{build_app_icon.LINUX_ICON_NAME}.png"
+            )
+            self.assertEqual(first_path.read_bytes(), second_path.read_bytes())
+
+
 @unittest.skipUnless(build_app_icon is not None, "build_app_icon script unavailable")
 class MainPlatformGateTests(unittest.TestCase):
     def test_refuses_to_run_off_darwin(self) -> None:
@@ -194,6 +253,7 @@ class MainPlatformGateTests(unittest.TestCase):
              mock.patch.object(build_app_icon, "_validate_master") as validate, \
              mock.patch.object(build_app_icon, "build_icns") as icns, \
              mock.patch.object(build_app_icon, "build_ico") as ico, \
+             mock.patch.object(build_app_icon, "build_linux_icons") as linux_icons, \
              mock.patch("builtins.print"):
             validate.return_value = mock.Mock(spec=Image.Image)
             exit_code = build_app_icon.main()
@@ -201,6 +261,7 @@ class MainPlatformGateTests(unittest.TestCase):
         self.assertEqual(req.call_count, 2)
         icns.assert_called_once()
         ico.assert_called_once()
+        linux_icons.assert_called_once()
 
 
 if __name__ == "__main__":  # pragma: no cover - direct run convenience

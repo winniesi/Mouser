@@ -23,12 +23,17 @@ Outputs (regenerated in place)
     macOS-style gutter for drop shadows. Consumed by ``Mouser.spec`` on
     the Windows build path.
 
+``packaging/linux/icons/hicolor/<size>x<size>/apps/io.github.tombadash.mouser.png``
+    Linux icon-theme PNG ladder for portable zip desktop integration.
+    Uses the same fitted icon body as the Windows asset so small KDE
+    taskbar entries stay legible.
+
 Tooling
 -------
 * ``iconutil`` (macOS-only, built into the OS) for ``.icns`` assembly.
 * ``sips`` (macOS-only, built into the OS) for the per-size resample.
 * ``Pillow`` (Python, declared in ``requirements.txt``) for the
-  Windows variant resize + ``.ico`` write.
+  Windows variant resize, ``.ico`` write, and Linux PNG ladder.
 
 Run
 ---
@@ -51,17 +56,20 @@ ROOT = Path(__file__).resolve().parent.parent
 MASTER = ROOT / "images" / "logo_icon.png"
 OUT_ICNS = ROOT / "images" / "AppIcon.icns"
 OUT_ICO = ROOT / "images" / "logo.ico"
+OUT_LINUX_HICOLOR = ROOT / "packaging" / "linux" / "icons" / "hicolor"
 
 MAC_CANVAS = 1024
 WIN_CANVAS = 1024
+LINUX_ICON_NAME = "io.github.tombadash.mouser"
 # Apple icon grid: 824 squircle on 1024 canvas (10% gutter each side).
-# Microsoft Learn: no fixed gutter; 96% fill keeps the 16 px tile
-# readable on the Windows 11 taskbar.
-WIN_FILL_RATIO = 980 / 1024
+# Microsoft Learn / Linux taskbars: no fixed gutter; 96% fill keeps the
+# 16 px tile readable.
+SMALL_SURFACE_FILL_RATIO = 980 / 1024
 
 ICNS_SIZES = (16, 32, 128, 256, 512)
 ICO_SIZES = ((16, 16), (24, 24), (32, 32), (48, 48), (64, 64),
              (128, 128), (256, 256))
+LINUX_ICON_SIZES = (16, 24, 32, 48, 64, 128, 256, 512)
 
 
 class BuildIconError(SystemExit):
@@ -90,7 +98,8 @@ def _validate_master(master_path: Path = MASTER) -> Image.Image:
     if not master_path.is_file():
         raise BuildIconError(f"master missing at {master_path}")
     try:
-        image = Image.open(master_path)
+        with Image.open(master_path) as source:
+            image = source.copy()
     except Exception as exc:  # pragma: no cover - Pillow wraps many error types
         raise BuildIconError(f"master at {master_path} is not a valid image: {exc}") from exc
     if image.mode != "RGBA":
@@ -149,16 +158,16 @@ def build_icns(
         _run_tool([iconutil, "-c", "icns", str(iconset), "-o", str(out_path)])
 
 
-def build_ico(master: Image.Image, *, out_path: Path = OUT_ICO) -> None:
+def _fitted_small_surface_master(master: Image.Image) -> Image.Image:
     # Lift the squircle out of the master, then re-fit it to ~96% of the
-    # Windows canvas. We use the alpha channel as the squircle mask: pixels
-    # with alpha > 0 belong to the squircle.
+    # canvas. We use the alpha channel as the squircle mask: pixels with
+    # alpha > 0 belong to the squircle.
     alpha = master.split()[-1]
     bbox = alpha.getbbox()
     if bbox is None:
         raise BuildIconError("master has no visible pixels")
     squircle = master.crop(bbox)
-    target_side = int(round(WIN_CANVAS * WIN_FILL_RATIO))
+    target_side = int(round(WIN_CANVAS * SMALL_SURFACE_FILL_RATIO))
     w, h = squircle.size
     scale = target_side / float(max(w, h))
     fitted = squircle.resize(
@@ -169,23 +178,48 @@ def build_ico(master: Image.Image, *, out_path: Path = OUT_ICO) -> None:
     fx = (WIN_CANVAS - fitted.size[0]) // 2
     fy = (WIN_CANVAS - fitted.size[1]) // 2
     canvas.paste(fitted, (fx, fy), fitted)
+    return canvas
+
+
+def build_ico(master: Image.Image, *, out_path: Path = OUT_ICO) -> None:
+    canvas = _fitted_small_surface_master(master)
     canvas.save(out_path, format="ICO", sizes=list(ICO_SIZES))
+
+
+def build_linux_icons(
+    master: Image.Image,
+    *,
+    out_root: Path = OUT_LINUX_HICOLOR,
+) -> None:
+    canvas = _fitted_small_surface_master(master)
+    for size in LINUX_ICON_SIZES:
+        target = (
+            out_root
+            / f"{size}x{size}"
+            / "apps"
+            / f"{LINUX_ICON_NAME}.png"
+        )
+        target.parent.mkdir(parents=True, exist_ok=True)
+        image = canvas.resize((size, size), Image.LANCZOS)
+        image.save(target, format="PNG")
 
 
 def main() -> int:
     if sys.platform != "darwin":
         raise BuildIconError(
             "must run on macOS (needs iconutil + sips). "
-            "The .ico Windows variant cannot be regenerated alone here; "
-            "rebuild from macOS so both assets stay in lockstep."
+            "The Windows and Linux variants cannot be regenerated alone here; "
+            "rebuild from macOS so all committed icon assets stay in lockstep."
         )
     iconutil = _require_tool("iconutil")
     sips = _require_tool("sips")
     master = _validate_master()
     build_icns(iconutil, sips)
     build_ico(master)
+    build_linux_icons(master)
     print(f"wrote {OUT_ICNS}")
     print(f"wrote {OUT_ICO}")
+    print(f"wrote {OUT_LINUX_HICOLOR}")
     return 0
 
 
