@@ -234,6 +234,14 @@ class LogiDeviceRegistryTests(unittest.TestCase):
         self.assertIsNotNone(device)
         self.assertEqual(device.key, "g502_x")
 
+    def test_resolve_g502_x_plus_by_product_id(self):
+        for product_id in (0xC095, 0x4099):
+            with self.subTest(product_id=f"0x{product_id:04X}"):
+                device = resolve_device(product_id=product_id)
+
+                self.assertIsNotNone(device)
+                self.assertEqual(device.key, "g502_x")
+
     def test_resolve_g502_proteus_by_reported_name(self):
         device = resolve_device(product_name="Tunable FPS Gaming Mouse G502")
 

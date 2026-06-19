@@ -227,7 +227,7 @@ LOGI_DEVICE_SPECS = (
     {
         "key": "g502_x",
         "display_name": "G502 X",
-        "product_ids": (0xC099, 0xC098, 0x409F),
+        "product_ids": (0xC099, 0xC098, 0xC095, 0x409F, 0x4099),
         "aliases": (
             "G502 X Gaming Mouse",
             "G502 X LIGHTSPEED",
