@@ -492,9 +492,18 @@ class Backend(QObject):
     def smartShiftThreshold(self):
         return int(self._cfg.get("settings", {}).get("smart_shift_threshold", 25))
 
+    @Property(int, notify=smartShiftChanged)
+    def scrollForce(self):
+        return int(self._cfg.get("settings", {}).get("scroll_force", 50))
+
     @Property(bool, notify=hidFeaturesReadyChanged)
     def smartShiftSupported(self):
         return self._engine.smart_shift_supported if self._engine else False
+
+    @Property(bool, notify=hidFeaturesReadyChanged)
+    def smartShiftForceSupported(self):
+        """True only on enhanced SmartShift (0x2111) devices that support scroll_force control."""
+        return self._engine.smart_shift_force_supported if self._engine else False
 
     @Property(bool, notify=deviceLayoutChanged)
     def deviceHasSmartShift(self):
@@ -1306,19 +1315,24 @@ class Backend(QObject):
             self._engine.set_dpi(dpi)
         self.settingsChanged.emit()
 
-    def _applySmartShift(self, mode=None, enabled=None, threshold=None):
+    def _applySmartShift(self, mode=None, enabled=None, threshold=None, scroll_force=None):
         """Update one or more SmartShift settings, persist config, and push to device."""
+        if scroll_force is not None:
+            scroll_force = max(1, min(100, int(scroll_force)))
         settings = self._cfg.setdefault("settings", {})
         current_mode = settings.get("smart_shift_mode", "ratchet")
         current_enabled = settings.get("smart_shift_enabled", False)
         current_threshold = settings.get("smart_shift_threshold", 25)
+        current_scroll_force = settings.get("scroll_force", 50)
         next_mode = current_mode if mode is None else mode
         next_enabled = current_enabled if enabled is None else enabled
         next_threshold = current_threshold if threshold is None else threshold
+        next_scroll_force = current_scroll_force if scroll_force is None else scroll_force
         if (
             next_mode == current_mode
             and next_enabled == current_enabled
             and next_threshold == current_threshold
+            and next_scroll_force == current_scroll_force
         ):
             return
         if mode is not None:
@@ -1327,12 +1341,15 @@ class Backend(QObject):
             settings["smart_shift_enabled"] = enabled
         if threshold is not None:
             settings["smart_shift_threshold"] = threshold
+        if scroll_force is not None:
+            settings["scroll_force"] = scroll_force
         save_config(self._cfg)
         if self._engine:
             self._engine.set_smart_shift(
                 settings.get("smart_shift_mode", "ratchet"),
                 settings.get("smart_shift_enabled", False),
                 settings.get("smart_shift_threshold", 25),
+                settings.get("scroll_force", 50),
             )
         self.smartShiftChanged.emit()
 
@@ -1347,6 +1364,10 @@ class Backend(QObject):
     @Slot(int)
     def setSmartShiftThreshold(self, threshold):
         self._applySmartShift(threshold=threshold)
+
+    @Slot(int)
+    def setScrollForce(self, scroll_force):
+        self._applySmartShift(scroll_force=scroll_force)
 
     @Slot(bool)
     def setInvertVScroll(self, value):
@@ -1693,6 +1714,11 @@ class Backend(QObject):
         # overwriting whatever the user chose in the UI.
         if enabled:
             settings["smart_shift_threshold"] = state.get("threshold", 25)
+        # Accept device-reported scroll_force when present and non-zero (enhanced devices only).
+        # Zero means "not reported" (basic devices or older firmware), so don't overwrite.
+        reported_scroll_force = state.get("scroll_force", 0)
+        if reported_scroll_force:
+            settings["scroll_force"] = reported_scroll_force
         self.smartShiftChanged.emit()
 
     def _onEngineStatusMessage(self, message):
