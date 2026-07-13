@@ -121,6 +121,7 @@ class ActionsRingOverlay(QWidget):
 
     action_selected = Signal(int)
     cancelled = Signal()
+    sector_changed = Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -470,6 +471,7 @@ class ActionsRingOverlay(QWidget):
             sector = self._cursor_to_sector(QCursor.pos())
         if sector != self._target_sector:
             self._target_sector = sector
+            self.sector_changed.emit(sector)
 
         # appear scale
         if self._appear_progress < 1.0:

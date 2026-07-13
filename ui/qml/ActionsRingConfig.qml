@@ -8,6 +8,7 @@ Item {
     id: actionsRingConfig
     readonly property var theme: Theme.palette(uiState.darkMode)
     property var s: lm.strings
+    property int pendingCustomSlot: -1
 
     Component {
         id: ringActionComboDelegate
@@ -230,6 +231,94 @@ Item {
 
             Item { width: 1; height: 16 }
 
+            // ── Ring Scope Card (global vs per-app) ──────────────────
+            Rectangle {
+                width: parent.width - 72
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: ringScopeContent.implicitHeight + 40
+                radius: Theme.radius
+                color: actionsRingConfig.theme.bgCard
+                border.width: 1
+                border.color: actionsRingConfig.theme.border
+
+                Column {
+                    id: ringScopeContent
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        top: parent.top
+                        margins: 20
+                    }
+                    spacing: 12
+
+                    Row {
+                        width: parent.width
+
+                        Text {
+                            text: s["ring.scope_title"] || "Same ring for every app"
+                            font { family: uiState.fontFamily; pixelSize: 16; bold: true }
+                            color: actionsRingConfig.theme.textPrimary
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width - ringScopeSwitch.width
+                        }
+
+                        Switch {
+                            id: ringScopeSwitch
+                            checked: backend.actionsRingUseGlobal
+                            anchors.verticalCenter: parent.verticalCenter
+                            onToggled: backend.setActionsRingUseGlobal(checked)
+                        }
+                    }
+
+                    Text {
+                        text: backend.actionsRingUseGlobal
+                              ? (s["ring.scope_global_desc"]
+                                 || "All apps share one set of ring actions.")
+                              : (s["ring.scope_perapp_desc"]
+                                 || "Each app has its own ring actions. Pick an app below to edit its ring.")
+                        font { family: uiState.fontFamily; pixelSize: 12 }
+                        color: actionsRingConfig.theme.textSecondary
+                        wrapMode: Text.WordWrap
+                        width: parent.width
+                    }
+
+                    // Profile picker (shown only in per-app mode)
+                    Row {
+                        width: parent.width
+                        spacing: 10
+                        visible: !backend.actionsRingUseGlobal
+
+                        Text {
+                            text: s["ring.scope_app"] || "App"
+                            font { family: uiState.fontFamily; pixelSize: 12; bold: true }
+                            color: actionsRingConfig.theme.textPrimary
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
+
+                        ComboBox {
+                            id: ringProfileCombo
+                            width: parent.width - 60
+                            model: backend.profiles
+                            textRole: "label"
+                            Material.accent: actionsRingConfig.theme.accent
+                            font { family: uiState.fontFamily; pixelSize: 11 }
+                            currentIndex: {
+                                var profs = backend.profiles
+                                for (var i = 0; i < profs.length; i++)
+                                    if (profs[i].name === backend.ringEditProfile)
+                                        return i
+                                return 0
+                            }
+                            onActivated: function(idx) {
+                                backend.setRingEditProfile(backend.profiles[idx].name)
+                            }
+                        }
+                    }
+                }
+            }
+
+            Item { width: 1; height: 16 }
+
             // ── Ring Slot Editor Card ────────────────────────────────
             Rectangle {
                 width: parent.width - 72
@@ -312,6 +401,11 @@ Item {
                                 }
                                 onActivated: function(idx) {
                                     var aid = backend.allActions[idx].id
+                                    if (aid === "__custom__") {
+                                        actionsRingConfig.pendingCustomSlot = index
+                                        ringKeyCaptureDialog.open("", "")
+                                        return
+                                    }
                                     actionsRingConfig.rebuildSlots(index, aid)
                                 }
                             }
@@ -322,5 +416,19 @@ Item {
 
             Item { width: 1; height: 32 }
         }
+    }
+
+    // Key capture dialog for custom-shortcut ring slots
+    KeyCaptureDialog {
+        id: ringKeyCaptureDialog
+        onCaptured: function(comboString) {
+            if (actionsRingConfig.pendingCustomSlot >= 0) {
+                actionsRingConfig.rebuildSlots(
+                    actionsRingConfig.pendingCustomSlot,
+                    "custom:" + comboString)
+                actionsRingConfig.pendingCustomSlot = -1
+            }
+        }
+        onCancelled: actionsRingConfig.pendingCustomSlot = -1
     }
 }

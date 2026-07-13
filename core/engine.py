@@ -230,7 +230,15 @@ class Engine:
             for v in mappings.values() if isinstance(v, str)
         )
         if any_ring:
-            slots = mappings.get("actions_ring_slots", [])
+            # Ring slot contents are global (shared by every app) unless the
+            # user opts into per-app rings.  Global mode ignores any per-app
+            # actions_ring_slots; per-app mode falls back to the global list
+            # when the active profile has none.
+            if settings.get("actions_ring_use_global", True):
+                slots = settings.get("actions_ring_slots", [])
+            else:
+                slots = (mappings.get("actions_ring_slots")
+                         or settings.get("actions_ring_slots", []))
             hold_ms = settings.get("actions_ring_hold_ms", 250)
             ring_btn = ring_btn_key or ""
             self._ring = ActionsRingController(
@@ -867,6 +875,19 @@ class Engine:
         if self._ring:
             self._ring.on_toggle_dismiss()
 
+    def ring_hover(self, sector):
+        """Called from the UI when the hovered ring slot changes.
+
+        Fires one haptic pulse per newly entered slot using the default
+        waveform, so it plays at the user's globally configured haptic level.
+        Gated on the dedicated Actions Ring hover setting; the global haptic
+        toggle and dedup are enforced inside _play_haptic_async."""
+        if sector is None or sector < 0:
+            return
+        if not self.cfg.get("settings", {}).get("actions_ring_hover_haptic", True):
+            return
+        self._play_haptic_async(immediate=True)
+
     def _dispatch_action(self, action_id, source_key=""):
         """Route an action to the appropriate engine handler or system executor."""
         if action_id == "activate_actions_ring":
@@ -1312,14 +1333,20 @@ class Engine:
             return hg.play_haptic_waveform(waveform_id)
         return False
 
-    def _play_haptic_async(self, waveform_id=0):
+    def _play_haptic_async(self, waveform_id=0, immediate=False):
         """Queue a haptic pulse with minimal latency.
 
         Calls queue_haptic_waveform() which sets _pending_haptic directly on
         the HidGestureListener.  Because HID++ event callbacks are dispatched
         synchronously on the listener thread, this flag is set before _on_report
         returns, so the listener loop picks it up at the very next iteration
-        (before the next _rx() call) rather than waiting for an incoming event."""
+        (before the next _rx() call) rather than waiting for an incoming event.
+
+        When ``immediate`` is True the pulse is written straight to the device
+        instead of queued.  Use it for pulses triggered off the listener
+        thread (e.g. an Actions Ring hover from the UI thread), where the
+        listener would otherwise be parked in its blocking read for up to a
+        second before draining the queue."""
         if not self.cfg.get("settings", {}).get("haptic_enabled", True):
             return
         if self.cfg.get("settings", {}).get("haptic_dedup", True):
@@ -1329,7 +1356,10 @@ class Engine:
             self._last_haptic_time = now
         hg = self.hook._hid_gesture
         if hg and hg.haptic_supported:
-            hg.queue_haptic_waveform(waveform_id)
+            if immediate:
+                hg.play_haptic_immediate(waveform_id)
+            else:
+                hg.queue_haptic_waveform(waveform_id)
 
     def reload_mappings(self):
         """

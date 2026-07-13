@@ -238,6 +238,8 @@ class ActionsRingController:
 
 def angle_to_sector(dx, dy, num_sectors) -> int:
     """Pure geometry: map (dx, dy) offset to a sector index, or -1 for dead zone."""
+    if num_sectors <= 0:
+        return -1
     dist = math.hypot(dx, dy)
     if dist < DEAD_ZONE_RADIUS:
         return -1

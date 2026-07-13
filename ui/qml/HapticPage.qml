@@ -786,6 +786,60 @@ Item {
                 }
             }
 
+            // Ring Hover Haptic Toggle Card
+            Rectangle {
+                id: ringHoverCard
+                opacity: backend.hapticEnabled ? 1.0 : 0.4
+                Behavior on opacity { NumberAnimation { duration: 150 } }
+                width: parent.width - 72
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: ringHoverRow.implicitHeight + 32
+                radius: Theme.radius
+                color: hapticPage.theme.bgCard
+                border.width: 1
+                border.color: hapticPage.theme.border
+
+                Column {
+                    id: ringHoverRow
+                    anchors {
+                        left: parent.left
+                        right: parent.right
+                        top: parent.top
+                        margins: 20
+                    }
+                    spacing: 6
+
+                    Row {
+                        width: parent.width
+
+                        Text {
+                            text: s["haptic.ring_hover_title"] || "Actions Ring Slot Feedback"
+                            font { family: uiState.fontFamily; pixelSize: 14; bold: true }
+                            color: hapticPage.theme.textPrimary
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: parent.width - ringHoverSwitch.width
+                        }
+
+                        Switch {
+                            id: ringHoverSwitch
+                            checked: backend.actionsRingHoverHaptic
+                            anchors.verticalCenter: parent.verticalCenter
+                            enabled: backend.hapticEnabled
+                            onToggled: backend.setActionsRingHoverHaptic(checked)
+                        }
+                    }
+
+                    Text {
+                        text: s["haptic.ring_hover_desc"]
+                              || "Fire a haptic pulse each time the cursor lands on a slot while the Actions Ring is open."
+                        font { family: uiState.fontFamily; pixelSize: 12 }
+                        color: hapticPage.theme.textSecondary
+                        wrapMode: Text.WordWrap
+                        width: parent.width
+                    }
+                }
+            }
+
             Item { width: 1; height: 16 }
 
             // ── Experimental Note ────────────────────────────────────

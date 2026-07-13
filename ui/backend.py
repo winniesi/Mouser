@@ -341,6 +341,7 @@ class Backend(QObject):
 
         self._ring_overlay = None  # created lazily on first show
         self._ring_visible = False  # thread-safe flag (avoids Qt isVisible() off main thread)
+        self._ring_edit_profile = ""  # profile targeted by the ring editor (per-app mode)
 
         # List-property cache invalidation. Each notify signal maps to the
         # subset of caches that depends on it; reads after the next emit
@@ -621,16 +622,51 @@ class Backend(QObject):
         if self._engine:
             self._engine.reload_mappings()
 
+    @Property(bool, notify=mappingsChanged)
+    def actionsRingUseGlobal(self):
+        """True when one shared ring is used for every app (default)."""
+        return bool(self._cfg.get("settings", {}).get(
+            "actions_ring_use_global", True))
+
+    @Slot(bool)
+    def setActionsRingUseGlobal(self, use_global):
+        self._cfg.setdefault("settings", {})["actions_ring_use_global"] = bool(use_global)
+        save_config(self._cfg)
+        self.mappingsChanged.emit()
+        if self._engine:
+            self._engine.reload_mappings()
+
+    @Property(str, notify=mappingsChanged)
+    def ringEditProfile(self):
+        """Profile the ring editor targets in per-app mode (defaults to active)."""
+        return self._ring_edit_profile or self._cfg.get("active_profile", "default")
+
+    @Slot(str)
+    def setRingEditProfile(self, name):
+        self._ring_edit_profile = name or ""
+        self.mappingsChanged.emit()
+
+    def _ring_slots_target_mappings(self):
+        """Mappings dict the ring editor reads/writes in per-app mode (the
+        selected profile, falling back to Default), created if absent."""
+        name = self._ring_edit_profile or self._cfg.get("active_profile", "default")
+        prof = self._cfg.get("profiles", {}).get(name)
+        if prof is None:
+            prof = self._cfg.get("profiles", {}).setdefault("default", {})
+        return prof.setdefault("mappings", {})
+
     @Property(list, notify=mappingsChanged)
     def actionsRingSlots(self):
-        mappings = get_active_mappings(self._cfg)
-        return list(mappings.get("actions_ring_slots", []))
+        if self.actionsRingUseGlobal:
+            return list(self._cfg.get("settings", {}).get("actions_ring_slots", []))
+        return list(self._ring_slots_target_mappings().get("actions_ring_slots", []))
 
     @Slot(list)
     def setActionsRingSlots(self, slots):
-        profile_name = self._cfg.get("active_profile", "default")
-        prof = self._cfg.get("profiles", {}).get(profile_name, {})
-        prof.setdefault("mappings", {})["actions_ring_slots"] = list(slots)
+        if self.actionsRingUseGlobal:
+            self._cfg.setdefault("settings", {})["actions_ring_slots"] = list(slots)
+        else:
+            self._ring_slots_target_mappings()["actions_ring_slots"] = list(slots)
         save_config(self._cfg)
         self.mappingsChanged.emit()
         if self._engine:
@@ -702,6 +738,11 @@ class Backend(QObject):
     @Property(bool, notify=hapticChanged)
     def hapticDedup(self):
         return bool(self._cfg.get("settings", {}).get("haptic_dedup", True))
+
+    @Property(bool, notify=hapticChanged)
+    def actionsRingHoverHaptic(self):
+        return bool(self._cfg.get("settings", {}).get(
+            "actions_ring_hover_haptic", True))
 
     @Property(bool, notify=hidFeaturesReadyChanged)
     def forceSensingSupported(self):
@@ -1668,6 +1709,15 @@ class Backend(QObject):
             self._engine.cfg = self._cfg
         self.hapticChanged.emit()
 
+    @Slot(bool)
+    def setActionsRingHoverHaptic(self, enabled):
+        """Set whether landing on a ring slot fires haptic feedback."""
+        self._cfg.setdefault("settings", {})["actions_ring_hover_haptic"] = bool(enabled)
+        save_config(self._cfg)
+        if self._engine:
+            self._engine.cfg = self._cfg
+        self.hapticChanged.emit()
+
     @Slot(int)
     def setForceSensitivity(self, value):
         value = int(value)
@@ -2074,6 +2124,7 @@ class Backend(QObject):
             self._ring_overlay = ActionsRingOverlay()
             self._ring_overlay.action_selected.connect(self._onRingActionSelected)
             self._ring_overlay.cancelled.connect(self._onRingCancelled)
+            self._ring_overlay.sector_changed.connect(self._onRingSectorChanged)
         pos = QCursor.pos()
         self._ring_overlay.show_ring(pos.x(), pos.y(), labels, interactive=interactive)
         self._ring_visible = True
@@ -2096,6 +2147,12 @@ class Backend(QObject):
         """Overlay click on center X or outside ring in toggle mode."""
         if self._engine:
             self._engine.ring_toggle_dismiss()
+
+    @Slot(int)
+    def _onRingSectorChanged(self, sector):
+        """Cursor moved onto a new ring slot -- fire hover haptic."""
+        if self._engine:
+            self._engine.ring_hover(sector)
 
     @Slot(str)
     def _handleProfileSwitch(self, profile_name):

@@ -1004,6 +1004,7 @@ class HidGestureListener:
         self._wheel_divert_lock = threading.Lock()
         self._wheel_divert_call_lock = threading.Lock()
         self._wheel_divert_result = None
+        self._tx_lock = threading.Lock()    # serialize concurrent HID writes
         self._haptic_idx = None             # feature index of HAPTIC (0x19B0)
         self._force_sensing_idx = None      # feature index of FORCE_SENSING (0x19C0)
         self._pending_haptic = None
@@ -1290,7 +1291,8 @@ class HidGestureListener:
         for i, b in enumerate(params):
             if 4 + i < LONG_LEN:
                 buf[4 + i] = b & 0xFF
-        self._dev.write(buf)
+        with self._tx_lock:
+            self._dev.write(buf)
 
     def _rx(self, timeout_ms=2000):
         """Read one HID input report (blocking with timeout).
@@ -2295,6 +2297,24 @@ class HidGestureListener:
         the next iteration, before the next _rx() call, so the pulse fires
         with minimal latency.  Does not wait for a result."""
         if self._haptic_idx is not None and self._dev is not None:
+            self._pending_haptic = ("play", int(waveform_id))
+
+    def play_haptic_immediate(self, waveform_id=0):
+        """Write a playWaveform command right away, from any thread.
+
+        Unlike queue_haptic_waveform(), this does not wait for the listener
+        loop to finish its (up to 1s) blocking read, so a pulse triggered
+        off the listener thread -- e.g. an Actions Ring hover from the UI
+        thread -- fires immediately instead of lagging behind _rx().  Writes
+        are serialized by _tx_lock, so this is safe alongside the listener's
+        reads and requests.  Fire-and-forget: the device's response is left
+        for the listener to read and ignore."""
+        if self._haptic_idx is None or self._dev is None:
+            return
+        try:
+            self._tx(LONG_ID, self._haptic_idx, 4, [int(waveform_id)])
+        except Exception as exc:
+            print(f"[HidGesture] immediate haptic failed: {exc}")
             self._pending_haptic = ("play", int(waveform_id))
 
     def _apply_pending_haptic(self):

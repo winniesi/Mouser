@@ -225,6 +225,9 @@ DEFAULT_CONFIG = {
         "update_check_state": {},
         "force_sensitivity": None,
         "actions_ring_hold_ms": 250,
+        "actions_ring_hover_haptic": True,
+        "actions_ring_use_global": True,
+        "actions_ring_slots": _default_actions_ring_slots(),
     },
 }
 
@@ -631,6 +634,23 @@ def _migrate(cfg):
         for i, a in enumerate(apps):
             if a.lower() == "wmplayer.exe":
                 apps[i] = "Microsoft.Media.Player.exe"
+
+    # Actions Ring: slot contents can be global (one ring for every app) or
+    # per-app.  Seed the global list from the Default profile the first time
+    # so existing configs keep their current ring.
+    settings = cfg.setdefault("settings", {})
+    settings.setdefault("actions_ring_use_global", True)
+    if "actions_ring_slots" not in settings:
+        default_slots = (
+            cfg.get("profiles", {})
+            .get("default", {})
+            .get("mappings", {})
+            .get("actions_ring_slots")
+        )
+        settings["actions_ring_slots"] = (
+            list(default_slots) if default_slots
+            else _default_actions_ring_slots()
+        )
 
     return cfg
 
