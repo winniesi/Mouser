@@ -17,6 +17,8 @@ from core.config import (
     BUTTON_TO_EVENTS, BUTTON_HOLD_EVENTS, SWIPE_SET_FOR_TAP,
     save_config, action_haptic_enabled, button_haptic_enabled,
     WHEEL_DIVERT_OFF, coerce_wheel_divert_setting,
+    GESTURE_SWIPE_ACTION, BUTTON_GESTURE_OWNERS, BUTTON_GESTURE_DIRECTIONS,
+    button_gesture_owners, button_gesture_bindings_for, button_gesture_tap_action,
 )
 from core.app_detector import AppDetector
 from core.mouse_hook_types import HidRuntimeState
@@ -195,12 +197,11 @@ class Engine:
         g_cross = settings.get("gesture_cross_ratio", 0.5)
 
         def _swipe_enabled(tap_key):
-            # A button's swipe set is active only when its tap is "Do Nothing"
-            # and at least one direction is mapped.
-            if mappings.get(tap_key, "none") != "none":
-                return False
-            return any(mappings.get(k, "none") != "none"
-                       for k in SWIPE_SET_FOR_TAP.get(tap_key, ()))
+            # A native control's (gesture / Sense Panel) swipe set is active when
+            # the button is in Gesture Swipe mode (action = the sentinel). Its
+            # direction actions live in "<key>_left/right/up/down" and the click
+            # routes to "<key>_tap" (wired below).
+            return mappings.get(tap_key, "none") == GESTURE_SWIPE_ACTION
 
         primary_ring = mappings.get(primary_tap_key) == "activate_actions_ring"
         self.hook.configure_gestures(
@@ -245,6 +246,23 @@ class Engine:
         # turns out not to have it, the divert simply has no effect).
         device = getattr(self, "connected_device", None)
         device_buttons = getattr(device, "supported_buttons", None)
+
+        # Per-button slide gestures (back/forward/middle): a button is an armed
+        # owner only when its mapping is the "gesture_swipe" sentinel AND the
+        # connected device advertises that button (device-driven HID capability
+        # gate). No device connected yet -> arm nothing; _on_connection_change
+        # re-runs _setup_hooks once supported_buttons is known.
+        active_button_gesture_owners = (
+            set() if device_buttons is None
+            else button_gesture_owners(self.cfg, device_buttons)
+        )
+        if hasattr(self.hook, "configure_button_gestures"):
+            self.hook.configure_button_gestures(
+                owners=active_button_gesture_owners,
+                threshold=g_threshold, commit_window_ms=g_commit,
+                settle_ms=g_settle, cross_ratio=g_cross,
+            )
+
         has_mode_shift = device_buttons is None or "mode_shift" in device_buttons
         self.hook.divert_mode_shift = (
             has_mode_shift
@@ -303,6 +321,12 @@ class Engine:
 
         for btn_key, action_id in mappings.items():
             if not isinstance(action_id, str):
+                continue
+            # Per-button gesture pad: the hook arms/swallows this button via
+            # configure_button_gestures; its tap and directions fire through the
+            # button_tap / button_swipe handlers registered below. Never wire a
+            # normal handler for the "gesture_swipe" sentinel itself.
+            if action_id == GESTURE_SWIPE_ACTION:
                 continue
             # Actions Ring — route through controller when mapped to the ring action.
             if action_id == "activate_actions_ring" and self._ring is not None:
@@ -372,6 +396,104 @@ class Engine:
                     # "Do Nothing" but button has haptic enabled — observe without
                     # consuming the event so the click still passes through normally.
                     self.hook.register(evt_type, self._make_handler("none", btn_key))
+
+        # Per-owner slide-gesture routing: the hook emits a generic
+        # button_swipe_<dir> / button_tap event tagged with
+        # raw_data["gesture_owner"]. Route (owner, direction) -> the
+        # "<owner>_<direction>" binding, and (owner, tap) -> "<owner>_tap".
+        if active_button_gesture_owners:
+            owner_bindings = {
+                owner: button_gesture_bindings_for(self.cfg, owner)
+                for owner in active_button_gesture_owners
+            }
+            for direction in BUTTON_GESTURE_DIRECTIONS:
+                self.hook.register(
+                    f"button_swipe_{direction}",
+                    self._make_button_gesture_handler(owner_bindings, direction),
+                )
+            owner_tap_actions = {
+                owner: button_gesture_tap_action(self.cfg, owner)
+                for owner in active_button_gesture_owners
+            }
+            self.hook.register(
+                "button_tap", self._make_button_tap_handler(owner_tap_actions)
+            )
+
+        # Native HID++ gesture controls (thumb Gesture button, Sense Panel) in
+        # Gesture Swipe mode: their swipe directions fire through the existing
+        # "<btn>_left/right/up/down" mapping keys (wired in the loop above via
+        # BUTTON_TO_EVENTS + the recognizer enabled by _swipe_enabled). Here we
+        # route their click to the in-gesture tap action "<btn>_tap"; the raw
+        # click is swallowed so it doesn't fall through to nothing.
+        _native_click_events = {"gesture": "gesture_click",
+                                "actions_ring": "sense_click"}
+        for native_btn, click_evt in _native_click_events.items():
+            if mappings.get(native_btn) != GESTURE_SWIPE_ACTION:
+                continue
+            self.hook.block(click_evt)
+            tap_action = mappings.get(f"{native_btn}_tap", "none")
+            if tap_action != "none":
+                self.hook.register(
+                    click_evt, self._make_handler(tap_action, native_btn)
+                )
+
+    def _make_button_tap_handler(self, owner_tap_actions):
+        """Handler for a quick tap of a gesture-pad button: fire that owner's
+        in-gesture tap action (or nothing when it is "Do Nothing")."""
+        def handler(event):
+            try:
+                if not self._enabled:
+                    return
+                raw = event.raw_data
+                owner = raw.get("gesture_owner") if isinstance(raw, dict) else None
+                if owner is None:
+                    return
+                action_id = owner_tap_actions.get(owner, "none")
+                if action_id == "none":
+                    return
+                self._emit_debug(
+                    f"Button gesture {owner} tap -> {action_id} "
+                    f"({self._action_label(action_id)})"
+                )
+                self._dispatch_action(action_id, owner)
+            except Exception as exc:
+                print(f"[Engine] _make_button_tap_handler EXCEPTION: {exc}")
+                import traceback; traceback.print_exc()
+        return handler
+
+    def _make_button_gesture_handler(self, owner_bindings, direction):
+        """Handler for a per-button slide gesture. Reads the owning button from
+        the event tag and fires that owner's action for this direction."""
+        def handler(event):
+            try:
+                if not self._enabled:
+                    return
+                raw = event.raw_data
+                owner = raw.get("gesture_owner") if isinstance(raw, dict) else None
+                if owner is None:
+                    return
+                action_id = owner_bindings.get(owner, {}).get(direction, "none")
+                if action_id == "none":
+                    return
+                self._emit_debug(
+                    f"Button gesture {owner} swipe {direction} -> {action_id} "
+                    f"({self._action_label(action_id)})"
+                )
+                self._emit_gesture_event({
+                    "type": "mapped",
+                    "event_name": event.event_type,
+                    "action_id": action_id,
+                    "action_label": self._action_label(action_id),
+                    "gesture_owner": owner,
+                })
+                if (action_haptic_enabled(self.cfg, action_id)
+                        or button_haptic_enabled(self.cfg, owner)):
+                    self._play_haptic_async(7)  # COMPLETED
+                self._dispatch_action(action_id, owner)
+            except Exception as exc:
+                print(f"[Engine] _make_button_gesture_handler EXCEPTION: {exc}")
+                import traceback; traceback.print_exc()
+        return handler
 
     def _make_handler(self, action_id, btn_key=""):
         def handler(event):

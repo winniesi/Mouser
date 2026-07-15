@@ -64,10 +64,70 @@ ACTIONS_RING_SWIPE_BUTTONS = (
 # Union of both swipe sets (order: Gesture button first, then Sense Panel).
 GESTURE_DIRECTION_BUTTONS = GESTURE_SWIPE_BUTTONS + ACTIONS_RING_SWIPE_BUTTONS
 
-# Maps a swipe-set's tap button key -> its four direction keys.
+# Maps a swipe-set's tap button key -> its four direction keys (HID++ gesture
+# and Sense Panel controls).
 SWIPE_SET_FOR_TAP = {
     "gesture": GESTURE_SWIPE_BUTTONS,
     "actions_ring": ACTIONS_RING_SWIPE_BUTTONS,
+}
+
+# ── Gesture Swipe: any button as a hold-and-slide gesture pad ────────────────
+# A button opts in by setting its action to the GESTURE_SWIPE_ACTION sentinel.
+# It then has its own tap action ("<btn>_tap", fired on a quick tap) and four
+# swipe directions ("<btn>_<direction>", fired on hold + slide). This is offered
+# uniformly across every configurable button; capability is device-driven (only
+# buttons the connected device advertises are shown).
+#
+# Two mechanisms sit behind one config model:
+#   * OS_MOTION_GESTURE_OWNERS (back/forward/middle/mode_shift) capture the slide
+#     from OS pointer motion, armed at the platform hook.
+#   * NATIVE_GESTURE_BUTTONS (thumb Gesture button, Sense Panel) use their HID++
+#     swipe recognizer; their existing "<btn>_left/right/up/down" direction keys
+#     are reused and the click routes to "<btn>_tap".
+GESTURE_SWIPE_ACTION = "gesture_swipe"
+GESTURE_SWIPE_DIRECTIONS = ("left", "right", "up", "down")
+SWIPE_CAPABLE_BUTTONS = (
+    "gesture", "actions_ring", "mode_shift", "middle", "xbutton1", "xbutton2",
+)
+OS_MOTION_GESTURE_OWNERS = ("middle", "xbutton1", "xbutton2", "mode_shift")
+NATIVE_GESTURE_BUTTONS = ("gesture", "actions_ring")
+
+# Back-compat aliases (older references).
+BUTTON_GESTURE_OWNERS = OS_MOTION_GESTURE_OWNERS
+BUTTON_GESTURE_DIRECTIONS = GESTURE_SWIPE_DIRECTIONS
+
+
+def swipe_direction_keys(button):
+    """The four "<button>_<direction>" swipe keys for a swipe-capable button."""
+    return tuple(f"{button}_{d}" for d in GESTURE_SWIPE_DIRECTIONS)
+
+
+# All tap-action keys ("<btn>_tap") for every swipe-capable button.
+GESTURE_SWIPE_TAP_KEYS = tuple(f"{b}_tap" for b in SWIPE_CAPABLE_BUTTONS)
+# Direction keys that don't already exist as GESTURE_SWIPE_BUTTONS /
+# ACTIONS_RING_SWIPE_BUTTONS above (mode_shift + the ordinary buttons).
+_NEW_DIRECTION_BUTTONS = ("mode_shift", "middle", "xbutton1", "xbutton2")
+GESTURE_SWIPE_NEW_DIRECTION_KEYS = tuple(
+    key for b in _NEW_DIRECTION_BUTTONS for key in swipe_direction_keys(b)
+)
+# Every gesture key that must be seeded into each profile's mappings.
+GESTURE_SWIPE_SEED_KEYS = GESTURE_SWIPE_TAP_KEYS + GESTURE_SWIPE_NEW_DIRECTION_KEYS
+# Back-compat aliases.
+BUTTON_GESTURE_DIRECTION_KEYS = tuple(
+    key for b in ("middle", "xbutton1", "xbutton2") for key in swipe_direction_keys(b)
+)
+BUTTON_GESTURE_TAP_KEYS = GESTURE_SWIPE_TAP_KEYS
+
+_SWIPE_BUTTON_LABELS = {
+    "gesture": "Gesture", "actions_ring": "Actions Ring", "mode_shift": "Mode shift",
+    "middle": "Middle", "xbutton1": "Back", "xbutton2": "Forward",
+}
+_BUTTON_GESTURE_LABELS = {
+    **{
+        f"{b}_{d}": f"{_SWIPE_BUTTON_LABELS[b]} swipe {d}"
+        for b in _NEW_DIRECTION_BUTTONS for d in GESTURE_SWIPE_DIRECTIONS
+    },
+    **{f"{b}_tap": f"{_SWIPE_BUTTON_LABELS[b]} tap" for b in SWIPE_CAPABLE_BUTTONS},
 }
 
 GESTURE_SENSITIVITY_PX = (18, 25, 33, 44, 56)
@@ -110,6 +170,8 @@ PROFILE_BUTTON_NAMES = {
     "actions_ring_right": "Actions Ring swipe right",
     "actions_ring_up":    "Actions Ring swipe up",
     "actions_ring_down":  "Actions Ring swipe down",
+    # Per-button slide-gesture directions (back/forward/middle).
+    **_BUTTON_GESTURE_LABELS,
 }
 
 # Maps config button keys to the MouseEvent types they correspond to.
@@ -189,6 +251,12 @@ DEFAULT_CONFIG = {
                 "actions_ring_right": "none",
                 "actions_ring_up": "none",
                 "actions_ring_down": "none",
+                # Gesture Swipe: any button is a plain action until set to
+                # "gesture_swipe"; these keys hold its per-direction actions and
+                # in-gesture tap action when it is. (gesture_*/actions_ring_*
+                # direction keys are declared above; here we add mode_shift's
+                # and every button's "_tap" key.)
+                **{key: "none" for key in GESTURE_SWIPE_SEED_KEYS},
                 "thumb_button": "none",
                 "actions_ring_slots": _default_actions_ring_slots(),
             },
@@ -327,6 +395,45 @@ def get_active_mappings(cfg):
     profiles = cfg.get("profiles", {})
     profile = profiles.get(profile_name, profiles.get("default", {}))
     return profile.get("mappings", DEFAULT_CONFIG["profiles"]["default"]["mappings"])
+
+
+def button_gesture_owners(cfg, device_buttons=None):
+    """OS-motion gesture owners: buttons (back/forward/middle/mode_shift) whose
+    active-profile action is the GESTURE_SWIPE_ACTION sentinel. These are armed
+    at the platform hook (the native gesture/ring controls use their HID
+    recognizer instead -- see native_gesture_swipe_active).
+
+    When ``device_buttons`` is given, restrict to buttons the connected device
+    actually advertises -- the device-driven capability gate.
+    """
+    mappings = get_active_mappings(cfg)
+    owners = {
+        owner for owner in OS_MOTION_GESTURE_OWNERS
+        if mappings.get(owner, "none") == GESTURE_SWIPE_ACTION
+    }
+    if device_buttons is not None:
+        owners &= set(device_buttons)
+    return owners
+
+
+def native_gesture_swipe_active(cfg, button):
+    """True when a native HID++ control (thumb Gesture button / Sense Panel) is
+    in Gesture Swipe mode (its action is the sentinel)."""
+    return get_active_mappings(cfg).get(button, "none") == GESTURE_SWIPE_ACTION
+
+
+def button_gesture_bindings_for(cfg, owner):
+    """Return ``{left: action_id, right: ..., up: ..., down: ...}`` for a button."""
+    mappings = get_active_mappings(cfg)
+    return {
+        direction: mappings.get(f"{owner}_{direction}", "none")
+        for direction in GESTURE_SWIPE_DIRECTIONS
+    }
+
+
+def button_gesture_tap_action(cfg, owner):
+    """Return the action a quick tap fires while ``owner`` is in gesture mode."""
+    return get_active_mappings(cfg).get(f"{owner}_tap", "none")
 
 
 def set_mapping(cfg, button, action_id, profile=None):
@@ -660,6 +767,25 @@ def _migrate(cfg):
             list(default_slots) if default_slots
             else _default_actions_ring_slots()
         )
+
+    # Gesture Swipe unification:
+    #  1. Seed every gesture key ("<btn>_tap" and the mode_shift/ordinary-button
+    #     direction keys) to "none" so old configs load cleanly.
+    #  2. Migrate the pre-unification native gesture/ring model: a thumb Gesture
+    #     button or Sense Panel whose tap was "Do Nothing" with a swipe direction
+    #     bound used to mean "swipes active". Convert that to the sentinel model
+    #     (action = "gesture_swipe", tap moved to "<btn>_tap"="none") so those
+    #     swipes keep firing under the unified scheme.
+    for pdata in cfg.get("profiles", {}).values():
+        mappings = pdata.setdefault("mappings", {})
+        for key in GESTURE_SWIPE_SEED_KEYS:
+            mappings.setdefault(key, "none")
+        for btn in NATIVE_GESTURE_BUTTONS:
+            if mappings.get(btn, "none") == "none" and any(
+                mappings.get(k, "none") != "none" for k in swipe_direction_keys(btn)
+            ):
+                mappings[btn] = GESTURE_SWIPE_ACTION
+                mappings.setdefault(f"{btn}_tap", "none")
 
     return cfg
 

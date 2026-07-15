@@ -48,6 +48,18 @@ class MouseEvent:
     SENSE_SWIPE_RIGHT = "sense_swipe_right"
     SENSE_SWIPE_UP = "sense_swipe_up"
     SENSE_SWIPE_DOWN = "sense_swipe_down"
+    # ── Per-button slide gestures (back/forward/middle, all platforms) ──
+    # Fired when an ordinary button armed as a gesture pad ("gesture_swipe")
+    # is held and slid. The owning button is carried in raw_data["gesture_owner"]
+    # (one of "middle"/"xbutton1"/"xbutton2") so the engine routes the swipe to
+    # the "<owner>_<direction>" binding. Not tied to any HID++ control.
+    BUTTON_SWIPE_LEFT = "button_swipe_left"
+    BUTTON_SWIPE_RIGHT = "button_swipe_right"
+    BUTTON_SWIPE_UP = "button_swipe_up"
+    BUTTON_SWIPE_DOWN = "button_swipe_down"
+    # Quick tap of a gesture-pad button (no slide): fires the button's in-gesture
+    # tap action. Owner carried in raw_data["gesture_owner"].
+    BUTTON_TAP = "button_tap"
     HSCROLL_LEFT = "hscroll_left"
     HSCROLL_RIGHT = "hscroll_right"
     MODE_SHIFT_DOWN = "mode_shift_down"

@@ -344,12 +344,40 @@ Item {
     readonly property string hscrollRightActionLabel: selectedProfileMappingState.hscroll_right
                                                  ? selectedProfileMappingState.hscroll_right.actionLabel
                                                  : (s["mouse.do_nothing"] || "Do Nothing")
-    // Both the Gesture button ("gesture") and the MX Master 4 Sense Panel
-    // ("actions_ring") are gesture-capable: a tap action plus their own swipe
-    // set. The config-editor panel is driven off whichever is selected; swipe
-    // keys are "<button>_left/right/up/down".
-    readonly property bool isSwipeButton: selectedButton === "gesture"
-                                          || selectedButton === "actions_ring"
+    // Unified model: every button uses the categorized action picker. Gesture
+    // controls no longer get a dedicated always-on swipe editor (isSwipeButton
+    // retired); instead any swipe-capable button opts in via the "Gesture
+    // Swipe" action, which reveals the tap + swipe sub-editor below.
+    readonly property bool isSwipeButton: false
+    // A swipe-capable button (thumb gesture, Sense Panel, mode shift, back,
+    // forward, middle -- whichever the device advertises) can be put into
+    // gesture mode by choosing "Gesture Swipe". isGestureSwipeMode is true once
+    // opted in; its keys are "<button>_tap" and "<button>_left/right/up/down".
+    readonly property bool isGestureSwipeEligible:
+        selectedButton !== ""
+        && backend.gestureSwipeButtons.indexOf(selectedButton) !== -1
+    readonly property string _selButtonActionId:
+        (selectedButton !== "" && selectedProfileMappingState[selectedButton])
+        ? selectedProfileMappingState[selectedButton].actionId : "none"
+    readonly property bool isGestureSwipeMode:
+        isGestureSwipeEligible && _selButtonActionId === "gesture_swipe"
+    // Tap + direction bindings for a gesture-pad button ("<owner>_tap" and
+    // "<owner>_left/right/up/down").
+    readonly property var _gsTapMap: isGestureSwipeMode
+        ? selectedProfileMappingState[selectedButton + "_tap"] : null
+    readonly property string gsTapActionId: _gsTapMap ? _gsTapMap.actionId : "none"
+    readonly property var _gsLeftMap: isGestureSwipeMode
+        ? selectedProfileMappingState[selectedButton + "_left"] : null
+    readonly property string gsLeftActionId: _gsLeftMap ? _gsLeftMap.actionId : "none"
+    readonly property var _gsRightMap: isGestureSwipeMode
+        ? selectedProfileMappingState[selectedButton + "_right"] : null
+    readonly property string gsRightActionId: _gsRightMap ? _gsRightMap.actionId : "none"
+    readonly property var _gsUpMap: isGestureSwipeMode
+        ? selectedProfileMappingState[selectedButton + "_up"] : null
+    readonly property string gsUpActionId: _gsUpMap ? _gsUpMap.actionId : "none"
+    readonly property var _gsDownMap: isGestureSwipeMode
+        ? selectedProfileMappingState[selectedButton + "_down"] : null
+    readonly property string gsDownActionId: _gsDownMap ? _gsDownMap.actionId : "none"
     readonly property var _swipeTapMap: isSwipeButton
         ? selectedProfileMappingState[selectedButton] : null
     readonly property string swipeTapActionId: _swipeTapMap
@@ -1611,6 +1639,37 @@ Item {
                                          && selectedButton !== "hscroll_left"
                                          && !(isSwipeButton
                                               && backend.supportsGestureDirections)
+                                         && !isGestureSwipeMode
+
+                                // Opt-in: turn an eligible button (back/forward/
+                                // middle the device advertises) into a gesture pad.
+                                Column {
+                                    width: parent.width
+                                    spacing: 8
+                                    visible: isGestureSwipeEligible
+                                             && backend.supportsGestureDirections
+
+                                    Text {
+                                        text: s["mouse.gesture"] || "Gesture"
+                                        font { family: uiState.fontFamily; pixelSize: 11;
+                                               capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                        color: theme.textDim
+                                    }
+
+                                    Flow {
+                                        width: parent.width; spacing: 8
+                                        ActionChip {
+                                            actionId: "gesture_swipe"
+                                            actionLabel: s["mouse.gesture_swipe"] || "Gesture Swipe"
+                                            isCurrent: selectedActionId === "gesture_swipe"
+                                            onPicked: function(aid) {
+                                                backend.setProfileMapping(
+                                                    selectedProfile, selectedButton, "gesture_swipe")
+                                                selectedActionId = "gesture_swipe"
+                                            }
+                                        }
+                                    }
+                                }
 
                                 Repeater {
                                     model: backend.actionCategories
@@ -1650,6 +1709,149 @@ Item {
                                                         selectedActionId = aid
                                                     }
                                                 }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ── Per-button Gesture Swipe editor ──────────────
+                            // Shown when an eligible button's action is set to
+                            // "Gesture Swipe": a tap action plus four swipe
+                            // directions, like the thumb Gesture button. Keys are
+                            // "<button>_tap" and "<button>_left/right/up/down".
+                            Column {
+                                width: parent.width
+                                spacing: 14
+                                visible: isGestureSwipeMode
+
+                                RowLayout {
+                                    width: parent.width
+                                    Text {
+                                        text: s["mouse.gesture_swipe"] || "Gesture Swipe"
+                                        Layout.fillWidth: true
+                                        font { family: uiState.fontFamily; pixelSize: 11;
+                                               capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                        color: theme.textDim
+                                    }
+                                    Text {
+                                        text: s["mouse.remove"] || "Remove"
+                                        font { family: uiState.fontFamily; pixelSize: 11; underline: true }
+                                        color: theme.accent
+                                        MouseArea {
+                                            anchors.fill: parent
+                                            cursorShape: Qt.PointingHandCursor
+                                            onClicked: {
+                                                backend.setProfileMapping(
+                                                    selectedProfile, selectedButton, "none")
+                                                selectedActionId = "none"
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Text {
+                                    text: s["mouse.tap_action"] || "Tap action"
+                                    font { family: uiState.fontFamily; pixelSize: 11;
+                                           capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                    color: theme.textDim
+                                }
+                                ComboBox {
+                                    width: parent.width
+                                    model: backend.allActions
+                                    textRole: "label"
+                                    delegate: actionComboDelegate
+                                    Material.accent: theme.accent
+                                    font { family: uiState.fontFamily; pixelSize: 11 }
+                                    currentIndex: actionIndexForId(gsTapActionId)
+                                    displayText: isCustomAction(gsTapActionId)
+                                                 ? customLabel(gsTapActionId)
+                                                 : (lm.strings, lm.trAction(currentText))
+                                    onActivated: function(index) {
+                                        var aid = backend.allActions[index].id
+                                        if (aid === "__custom__") {
+                                            keyCaptureDialog.open(selectedProfile, selectedButton + "_tap")
+                                            return
+                                        }
+                                        backend.setProfileMapping(
+                                            selectedProfile, selectedButton + "_tap", aid)
+                                    }
+                                }
+
+                                Rectangle { width: parent.width; height: 1; color: theme.border }
+
+                                Row {
+                                    width: parent.width
+                                    spacing: 12
+                                    Text {
+                                        text: s["mouse.threshold"] || "Threshold"
+                                        font { family: uiState.fontFamily; pixelSize: 12; bold: true }
+                                        color: theme.textPrimary
+                                    }
+                                    Text {
+                                        text: (gsThreshold.pressed
+                                               ? Math.round(gsThreshold.value / 5.0) * 5
+                                               : backend.gestureThreshold) + " px"
+                                        font { family: uiState.fontFamily; pixelSize: 12 }
+                                        color: theme.textSecondary
+                                    }
+                                }
+                                WheelSafeSlider {
+                                    id: gsThreshold
+                                    width: parent.width
+                                    from: 20; to: 400; stepSize: 5
+                                    value: backend.gestureThreshold
+                                    accentColor: theme.accent
+                                    accentDimColor: theme.accentDim
+                                    trackColor: theme.border
+                                    onPressedChanged: {
+                                        if (!pressed)
+                                            backend.setGestureThreshold(Math.round(value / 5.0) * 5)
+                                    }
+                                }
+
+                                Text {
+                                    text: s["mouse.swipe_actions"] || "Swipe actions"
+                                    font { family: uiState.fontFamily; pixelSize: 11;
+                                           capitalization: Font.AllUppercase; letterSpacing: 1 }
+                                    color: theme.textDim
+                                }
+
+                                Repeater {
+                                    model: [
+                                        { dir: "left",  label: s["mouse.swipe_left"]  || "Swipe left",  aid: gsLeftActionId },
+                                        { dir: "right", label: s["mouse.swipe_right"] || "Swipe right", aid: gsRightActionId },
+                                        { dir: "up",    label: s["mouse.swipe_up"]    || "Swipe up",    aid: gsUpActionId },
+                                        { dir: "down",  label: s["mouse.swipe_down"]  || "Swipe down",  aid: gsDownActionId }
+                                    ]
+                                    delegate: RowLayout {
+                                        width: parent.width
+                                        spacing: 12
+                                        Text {
+                                            text: modelData.label
+                                            Layout.preferredWidth: 100
+                                            font { family: uiState.fontFamily; pixelSize: 12 }
+                                            color: theme.textPrimary
+                                        }
+                                        ComboBox {
+                                            Layout.fillWidth: true
+                                            model: backend.allActions
+                                            textRole: "label"
+                                            delegate: actionComboDelegate
+                                            Material.accent: theme.accent
+                                            font { family: uiState.fontFamily; pixelSize: 11 }
+                                            currentIndex: actionIndexForId(modelData.aid)
+                                            displayText: isCustomAction(modelData.aid)
+                                                         ? customLabel(modelData.aid)
+                                                         : (lm.strings, lm.trAction(currentText))
+                                            onActivated: function(index) {
+                                                var aid = backend.allActions[index].id
+                                                var key = selectedButton + "_" + modelData.dir
+                                                if (aid === "__custom__") {
+                                                    keyCaptureDialog.open(selectedProfile, key)
+                                                    return
+                                                }
+                                                backend.setProfileMapping(selectedProfile, key, aid)
                                             }
                                         }
                                     }

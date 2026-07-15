@@ -3,6 +3,7 @@ Shared mouse hook behavior used by platform implementations.
 """
 
 import queue
+import time
 
 try:
     from core.hid_gesture import HidGestureListener
@@ -29,6 +30,13 @@ _SENSE_SWIPE_EVENTS = {
 }
 # Backwards-compatible alias (primary control default family).
 _SWIPE_EVENTS = _GESTURE_SWIPE_EVENTS
+# Per-button slide-gesture direction -> event (owner carried in raw_data).
+_BUTTON_SWIPE_EVENTS = {
+    "left": MouseEvent.BUTTON_SWIPE_LEFT,
+    "right": MouseEvent.BUTTON_SWIPE_RIGHT,
+    "up": MouseEvent.BUTTON_SWIPE_UP,
+    "down": MouseEvent.BUTTON_SWIPE_DOWN,
+}
 
 
 class BaseMouseHook:
@@ -70,6 +78,21 @@ class BaseMouseHook:
         self._thumb_move_callback = None
         self._thumb_recognizer = GestureRecognizer(
             on_swipe=self._on_thumb_recognized_swipe,
+            on_debug=self._emit_gesture_event,
+        )
+        # ── Per-button slide gestures (back/forward/middle, all platforms) ──
+        # A separate recognizer from the HID ones above: the shared recognizer
+        # locks to its first motion source, so button gestures (OS pointer
+        # motion) get their own instance. Only one owner button gestures at a
+        # time; _button_gesture_active_owner names it while held.
+        self._button_gesture_owners = set()
+        self._button_gesture_enabled = False
+        self._button_gesture_active_owner = None
+        self._button_gesture_armed_at = 0.0
+        self._button_gesture_timeout_ms = 3000
+        self._button_gesture_origin_needed = False
+        self._button_gesture_recognizer = GestureRecognizer(
+            on_swipe=self._on_button_recognized_swipe,
             on_debug=self._emit_gesture_event,
         )
         self._connected_device = None
@@ -160,6 +183,114 @@ class BaseMouseHook:
         hg = self._hid_gesture
         if hg is not None and hasattr(hg, "set_thumb_rawxy_enabled"):
             hg.set_thumb_rawxy_enabled(bool(enabled))
+
+    # ── Per-button slide gestures (back/forward/middle) ───────────────
+    # Shared, platform-agnostic arm/sample/release for ordinary buttons that
+    # have been set to the "gesture_swipe" action. Each platform hook calls
+    # these from its own event path (Windows WH_MOUSE_LL, macOS CGEventTap,
+    # Linux evdev): arm on owner-button-down, feed motion while held, release
+    # on owner-button-up. All direction math lives in the shared recognizer,
+    # so there is one source of truth across platforms.
+    def configure_button_gestures(
+        self,
+        owners=None,
+        threshold=50,
+        commit_window_ms=400,
+        settle_ms=90,
+        cross_ratio=0.5,
+        timeout_ms=3000,
+    ):
+        """Set which buttons (owner names "middle"/"xbutton1"/"xbutton2") are
+        armed as slide-gesture pads and configure their shared recognizer."""
+        self._button_gesture_owners = set(owners) if owners else set()
+        self._button_gesture_enabled = bool(self._button_gesture_owners)
+        self._button_gesture_timeout_ms = max(250, int(timeout_ms))
+        self._button_gesture_recognizer.configure(
+            enabled=self._button_gesture_enabled,
+            threshold=threshold,
+            commit_window_ms=commit_window_ms,
+            settle_ms=settle_ms,
+            cross_ratio=cross_ratio,
+        )
+        if not self._button_gesture_enabled:
+            self._button_gesture_active_owner = None
+
+    def is_button_gesture_owner(self, owner):
+        """True if ``owner`` is currently armed as a slide-gesture pad."""
+        return owner in self._button_gesture_owners
+
+    def arm_button_gesture(self, owner, now=None):
+        """Begin a gesture hold for ``owner`` (called on owner-button-down).
+        Returns True if the press was consumed (do not emit the normal down).
+        First-wins: ignored if another owner is already mid-gesture."""
+        if owner not in self._button_gesture_owners:
+            return False
+        if self._button_gesture_active_owner is not None:
+            return False
+        self._button_gesture_active_owner = owner
+        self._button_gesture_armed_at = (
+            time.monotonic() if now is None else now
+        )
+        # Platforms that derive deltas from an absolute cursor position (Windows)
+        # must re-establish their origin on the first move of this hold, since a
+        # button may arm without a known start point (e.g. mode shift over HID).
+        self._button_gesture_origin_needed = True
+        self._button_gesture_recognizer.begin()
+        self._emit_debug(f"Button gesture armed owner={owner}")
+        return True
+
+    def sample_button_gesture(self, dx, dy, source="os_motion", now=None):
+        """Feed one movement delta while an owner button is held. Returns True
+        if consumed (the platform hook should swallow the motion to freeze the
+        cursor). Auto-aborts a stuck hold once it outlives the timeout so a
+        missed button-up can never wedge the pointer."""
+        if self._button_gesture_active_owner is None:
+            return False
+        t = time.monotonic() if now is None else now
+        if (t - self._button_gesture_armed_at) * 1000.0 > self._button_gesture_timeout_ms:
+            self.abort_button_gesture("timeout")
+            return False
+        self._button_gesture_recognizer.sample(dx, dy, source, now=now)
+        return True
+
+    def release_button_gesture(self, owner):
+        """End a gesture hold on owner-button-up. Returns "gesture" if a swipe
+        fired during the hold, "click" if it was a plain tap, or None if this
+        owner was not the armed one. On a plain tap, emits a BUTTON_TAP event
+        tagged with the owner so the engine can fire the in-gesture tap action."""
+        if self._button_gesture_active_owner != owner:
+            return None
+        was_click = self._button_gesture_recognizer.end()
+        self._button_gesture_active_owner = None
+        result = "click" if was_click else "gesture"
+        self._emit_debug(f"Button gesture released owner={owner} -> {result}")
+        if was_click:
+            self._emit_gesture_swipe(
+                MouseEvent(MouseEvent.BUTTON_TAP, {"gesture_owner": owner})
+            )
+        return result
+
+    def abort_button_gesture(self, reason=""):
+        """Give up an armed gesture without firing or replaying anything."""
+        owner = self._button_gesture_active_owner
+        if owner is None:
+            return
+        self._button_gesture_recognizer.end()
+        self._button_gesture_active_owner = None
+        self._emit_debug(f"Button gesture aborted owner={owner} reason={reason}")
+
+    def _on_button_recognized_swipe(self, direction):
+        """Recognizer callback: emit a BUTTON_SWIPE event tagged with the
+        currently-held owner so the engine routes it to <owner>_<direction>."""
+        owner = self._button_gesture_active_owner
+        if owner is None:
+            return
+        event_type = _BUTTON_SWIPE_EVENTS.get(direction)
+        if event_type is None:
+            return
+        self._emit_gesture_swipe(
+            MouseEvent(event_type, {"gesture_owner": owner, "direction": direction})
+        )
 
     def set_gesture_os_passthrough(self, enabled, move_callback=None):
         """When True, rawXY deltas during a gesture hold are forwarded to
@@ -458,9 +589,20 @@ class BaseMouseHook:
         )
 
     def _on_hid_mode_shift_down(self):
+        # Mode shift is HID++ diverted (no OS button event), so when it's armed
+        # as a gesture pad we start the hold here on the HID press and let the
+        # platform hook feed OS pointer motion -- the same hybrid the macOS
+        # gesture button uses. Otherwise it's a normal button press.
+        if self.is_button_gesture_owner("mode_shift") and self.arm_button_gesture(
+            "mode_shift"
+        ):
+            return
         self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_DOWN))
 
     def _on_hid_mode_shift_up(self):
+        if self._button_gesture_active_owner == "mode_shift":
+            self.release_button_gesture("mode_shift")
+            return
         self._dispatch(MouseEvent(MouseEvent.MODE_SHIFT_UP))
 
     def _on_hid_dpi_switch_down(self):

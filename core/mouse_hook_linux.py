@@ -726,6 +726,28 @@ class MouseHook(BaseMouseHook):
     def _handle_button(self, event):
         if self._ui_passthrough or not self._evdev_remap_ready:
             return
+
+        # ── Per-button slide gestures (back/forward/middle) ──────────────
+        # An armed owner button's press starts the shared recognizer and its
+        # release resolves it; the physical event is neither dispatched nor
+        # forwarded to the virtual mouse (so a tap does nothing and a hold+slide
+        # fires the direction action). Motion is captured in _handle_rel.
+        gesture_owner = None
+        if event.code == _ecodes.BTN_SIDE:
+            gesture_owner = "xbutton1"
+        elif event.code == _ecodes.BTN_EXTRA:
+            gesture_owner = "xbutton2"
+        elif event.code == _ecodes.BTN_MIDDLE:
+            gesture_owner = "middle"
+        if gesture_owner is not None:
+            if event.value == 1 and self.is_button_gesture_owner(gesture_owner):
+                if self.arm_button_gesture(gesture_owner):
+                    return
+            elif (event.value == 0
+                  and self._button_gesture_active_owner == gesture_owner):
+                self.release_button_gesture(gesture_owner)
+                return
+
         mouse_event = None
         should_block = False
 
@@ -766,6 +788,14 @@ class MouseHook(BaseMouseHook):
         value = event.value
 
         if code == _ecodes.REL_X or code == _ecodes.REL_Y:
+            # Per-button slide gesture: feed motion to the shared recognizer and
+            # suppress it (cursor freeze) while an owner button is held.
+            if self._button_gesture_active_owner is not None:
+                if code == _ecodes.REL_X:
+                    self.sample_button_gesture(value, 0, "os_motion")
+                else:
+                    self.sample_button_gesture(0, value, "os_motion")
+                return
             if self._gesture_direction_enabled and self._gesture_active:
                 if code == _ecodes.REL_X:
                     self._gesture_recognizer.sample(value, 0, "evdev")
@@ -852,6 +882,7 @@ class MouseHook(BaseMouseHook):
 
     def stop(self):
         self._running = False
+        self.abort_button_gesture("stop")
         self._stop_hid_listener()
         self._hid_ready = False
         self._connected_device = None

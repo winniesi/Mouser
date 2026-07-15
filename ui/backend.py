@@ -22,6 +22,7 @@ from core.config import (
     PROFILE_BUTTON_NAMES, set_mapping, create_profile, delete_profile,
     get_icon_for_exe, HAPTIC_ELIGIBLE_ACTIONS, set_action_haptic,
     set_button_haptic,
+    GESTURE_SWIPE_ACTION, SWIPE_CAPABLE_BUTTONS, GESTURE_SWIPE_DIRECTIONS,
 )
 from core import app_catalog
 from core.device_layouts import get_device_layout, get_manual_layout_choices
@@ -78,7 +79,24 @@ from ui.screenshot_common import screenshot_file_path, screenshot_file_paths, sc
 def _action_label(action_id):
     if action_id.startswith("custom:"):
         return custom_action_label(action_id)
+    if action_id == GESTURE_SWIPE_ACTION:
+        return "Gesture Swipe"
     return ACTIONS.get(action_id, {}).get("label", "Do Nothing")
+
+
+def _augment_with_button_gesture_keys(eff):
+    """Add the Gesture Swipe keys (four ``<btn>_<direction>`` swipe keys plus the
+    ``<btn>_tap`` key) for each swipe-capable button the device exposes, so the
+    gesture editor can read and write them. ``None`` passes through."""
+    if eff is None:
+        return None
+    eff_set = set(eff)
+    for btn in SWIPE_CAPABLE_BUTTONS:
+        if btn in eff_set:
+            eff_set.add(f"{btn}_tap")
+            for direction in GESTURE_SWIPE_DIRECTIONS:
+                eff_set.add(f"{btn}_{direction}")
+    return eff_set
 
 
 def _qt_shortcut_modifier_name(name):
@@ -895,6 +913,19 @@ class Backend(QObject):
     @Property(bool, constant=True)
     def supportsGestureDirections(self):
         return sys.platform in ("darwin", "win32", "linux")
+
+    @Property(list, notify=deviceLayoutChanged)
+    def gestureSwipeButtons(self):
+        """Buttons the connected device advertises that can be put into Gesture
+        Swipe mode (thumb Gesture button, Sense Panel, mode shift, back, forward,
+        middle). Empty when the platform/device doesn't support it. Drives the
+        per-button "Gesture Swipe" chip in the UI."""
+        if not self.supportsGestureDirections:
+            return []
+        btns = self._effective_supported_buttons
+        if btns is None:
+            return []
+        return [b for b in SWIPE_CAPABLE_BUTTONS if b in btns]
 
     @Property(bool, constant=True)
     def isMacOS(self):
@@ -2385,6 +2416,9 @@ class Backend(QObject):
             eff = get_buttons_for_layout(override_key)
         else:
             eff = getattr(device, "supported_buttons", None)
+        # Surface the per-button slide-gesture direction keys for whichever
+        # owner buttons this device exposes, so the swipe editor can bind them.
+        eff = _augment_with_button_gesture_keys(eff)
         old_eff = self._effective_supported_buttons
         self._effective_supported_buttons = eff
 

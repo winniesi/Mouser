@@ -29,6 +29,7 @@ from core.mouse_hook_base import BaseMouseHook, HidGestureListener
 from core.mouse_hook_types import MouseEvent
 
 WH_MOUSE_LL = 14
+WM_MOUSEMOVE = 0x0200
 WM_XBUTTONDOWN = 0x020B
 WM_XBUTTONUP = 0x020C
 WM_MBUTTONDOWN = 0x0207
@@ -250,6 +251,10 @@ class MouseHook(BaseMouseHook):
         self._startup_ok = False
         self._prev_raw_buttons = {}
         self._last_rehook_time = 0
+        # Per-button slide gesture: last cursor position while an owner button
+        # is held, to derive per-move deltas from the LL hook's absolute point.
+        self._btn_gesture_last_x = 0
+        self._btn_gesture_last_y = 0
         self._init_dispatch_queue(maxsize=512)
         self._dispatch_worker_thread = None
 
@@ -314,6 +319,51 @@ class MouseHook(BaseMouseHook):
             # to another machine while Mouser keeps running here.
             if not self._should_intercept_events():
                 return CallNextHookEx(self._hook, nCode, wParam, lParam)
+
+            # ── Per-button slide gestures (back/forward/middle) ──────────
+            # When a button is armed as a gesture pad, its press starts the
+            # shared recognizer and is swallowed; pointer motion while held is
+            # fed to the recognizer (which fires a button_swipe event on a
+            # committed slide); the release ends the hold. A quick tap with no
+            # slide simply ends as a no-op. Fast None-check when idle.
+            if self._button_gesture_active_owner is not None and wParam == WM_MOUSEMOVE:
+                # First move of a hold that armed without a start point (e.g.
+                # mode shift over HID): establish the origin, don't sample yet.
+                if self._button_gesture_origin_needed:
+                    self._btn_gesture_last_x = data.pt.x
+                    self._btn_gesture_last_y = data.pt.y
+                    self._button_gesture_origin_needed = False
+                    return CallNextHookEx(self._hook, nCode, wParam, lParam)
+                dx = data.pt.x - self._btn_gesture_last_x
+                dy = data.pt.y - self._btn_gesture_last_y
+                self._btn_gesture_last_x = data.pt.x
+                self._btn_gesture_last_y = data.pt.y
+                self.sample_button_gesture(dx, dy, "os_motion")
+                return CallNextHookEx(self._hook, nCode, wParam, lParam)
+
+            gesture_owner = None
+            if wParam in (WM_MBUTTONDOWN, WM_MBUTTONUP):
+                gesture_owner = "middle"
+            elif wParam in (WM_XBUTTONDOWN, WM_XBUTTONUP):
+                xb = hiword(mouse_data)
+                if xb == XBUTTON1:
+                    gesture_owner = "xbutton1"
+                elif xb == XBUTTON2:
+                    gesture_owner = "xbutton2"
+
+            if gesture_owner is not None:
+                if wParam in (WM_MBUTTONDOWN, WM_XBUTTONDOWN):
+                    if (self.is_button_gesture_owner(gesture_owner)
+                            and self.arm_button_gesture(gesture_owner)):
+                        # Origin is known from this press point.
+                        self._btn_gesture_last_x = data.pt.x
+                        self._btn_gesture_last_y = data.pt.y
+                        self._button_gesture_origin_needed = False
+                        return 1
+                elif self._button_gesture_active_owner == gesture_owner:
+                    # owner-button up while armed -> resolve and swallow
+                    self.release_button_gesture(gesture_owner)
+                    return 1
 
             if wParam == WM_XBUTTONDOWN:
                 xbutton = hiword(mouse_data)
@@ -675,6 +725,7 @@ class MouseHook(BaseMouseHook):
 
     def stop(self):
         self._running = False
+        self.abort_button_gesture("stop")
         self._stop_hid_listener()
         self._connected_device = None
         if self._dispatch_worker_thread:

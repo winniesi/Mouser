@@ -42,6 +42,13 @@ def _autoreleased(fn):
 _BTN_MIDDLE = 2
 _BTN_BACK = 3
 _BTN_FORWARD = 4
+# Quartz other-button number -> per-button slide-gesture owner name (the config
+# button keys back/forward/middle map to).
+_BTN_TO_GESTURE_OWNER = {
+    _BTN_MIDDLE: "middle",
+    _BTN_BACK: "xbutton1",
+    _BTN_FORWARD: "xbutton2",
+}
 _SCROLL_INVERT_MARKER = 0x4D4F5553
 _INJECTED_EVENT_MARKER = 0x4D4F5554
 _SHIFT_WHEEL_HSCROLL_MARKER = 0x4D4F5556
@@ -227,6 +234,9 @@ class MouseHook(BaseMouseHook):
                     f"(type=0x{event_type:X}), re-enabling",
                     flush=True,
                 )
+                # A pending owner-gesture release may have been dropped while
+                # the tap was disabled -- abort it so the cursor can't freeze.
+                self.abort_button_gesture("tap_disabled")
                 Quartz.CGEventTapEnable(self._tap, True)
                 return cg_event
 
@@ -259,6 +269,26 @@ class MouseHook(BaseMouseHook):
             mouse_event = None
             should_block = False
 
+            # ── Per-button slide gestures (back/forward/middle) ──────────
+            # Motion while an owner button is held feeds the shared recognizer
+            # and is swallowed (return None) so the cursor freezes during the
+            # gesture. Fast None-check when no owner is armed.
+            if (
+                self._button_gesture_active_owner is not None
+                and event_type in (
+                    Quartz.kCGEventMouseMoved,
+                    Quartz.kCGEventOtherMouseDragged,
+                )
+            ):
+                dx = Quartz.CGEventGetIntegerValueField(
+                    cg_event, Quartz.kCGMouseEventDeltaX
+                )
+                dy = Quartz.CGEventGetIntegerValueField(
+                    cg_event, Quartz.kCGMouseEventDeltaY
+                )
+                self.sample_button_gesture(dx, dy, "os_motion")
+                return None
+
             if (
                 event_type
                 in (
@@ -290,6 +320,12 @@ class MouseHook(BaseMouseHook):
                         self._debug_callback(f"OtherMouseDown btn={btn}")
                     except Exception:
                         pass
+                owner = _BTN_TO_GESTURE_OWNER.get(btn)
+                if (owner is not None and self.is_button_gesture_owner(owner)
+                        and self.arm_button_gesture(owner)):
+                    # Armed as a gesture pad -- swallow the press; motion feeds
+                    # the recognizer and the release resolves it.
+                    return None
                 if btn == _BTN_MIDDLE:
                     mouse_event = MouseEvent(MouseEvent.MIDDLE_DOWN)
                     should_block = MouseEvent.MIDDLE_DOWN in self._blocked_events
@@ -309,6 +345,12 @@ class MouseHook(BaseMouseHook):
                         self._debug_callback(f"OtherMouseUp btn={btn}")
                     except Exception:
                         pass
+                owner = _BTN_TO_GESTURE_OWNER.get(btn)
+                if (owner is not None
+                        and self._button_gesture_active_owner == owner):
+                    # owner-button up while armed -> resolve and swallow.
+                    self.release_button_gesture(owner)
+                    return None
                 if btn == _BTN_MIDDLE:
                     mouse_event = MouseEvent(MouseEvent.MIDDLE_UP)
                     should_block = MouseEvent.MIDDLE_UP in self._blocked_events
@@ -532,6 +574,7 @@ class MouseHook(BaseMouseHook):
     def stop(self):
         self._unregister_wake_observer()
         self._running = False
+        self.abort_button_gesture("stop")
         self._stop_hid_listener()
         self._connected_device = None
 

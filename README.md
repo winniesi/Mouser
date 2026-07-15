@@ -385,6 +385,7 @@ Every bit helps keep the project going — thank you.
 - **[@zeward-lee](https://github.com/zeward-lee)** - Scan-code injection on remapped keystrokes so side-button copy/paste reaches UWP / Store apps.
 - **[@ArtisticZhao](https://github.com/ArtisticZhao)** - Background HID polling no longer resets the system idle timer, so the display can sleep and the system can idle while Mouser runs (visibility-gated polling with an idle-grace period).
 - **[@mizi](https://github.com/mizi)** - Scroll Force control: adjustable ratchet firmness for enhanced SmartShift (HID++ `0x2111`) devices, with a per-device Scroll page slider.
+- **[@kevin-nous](https://github.com/kevin-nous)** - Original per-button slide-gesture concept (event-tap arming, dual-mode tap/gesture), which inspired the cross-platform "Gesture Swipe" action: any device-advertised button becomes a hold-and-slide gesture pad on Windows, macOS, and Linux.
 
 ---
 
